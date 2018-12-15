@@ -1,34 +1,56 @@
 import * as esprima from 'esprima';
 import * as escodegen from 'escodegen';
 
-
-
 let testColors = {};
 let testIndex= 0;
+
 const parseCode = (codeToParse,params) => {
     let initialAst = esprima.parseScript(codeToParse);
     let finalAst = parseProgram(initialAst,params);
-    return dyeCode(finalAst);
+    return dyeCode(refactorCode(finalAst));
 
 };
-// const parseParams = (params) =>{
-//     let newParams ={};
-//     if (params.length === 0)
-//         return newParams;
-//     let newString =params;
-//     if (params[0] ==='(')
-//         newString = 'let ' + params.substring(1,params.length-1);
-//     else
-//         newString = 'let' + params;
-//     let varDecl = esprima.parseScript(newString);
-//     console.log(varDecl);
-//     parseValDecl(varDecl.body[0],newParams);
-//     console.log(newParams);
-//     return newParams;
-// }
-const dyeCode = (parsedCode) => {
-    let output = escodegen.generate(parsedCode);
+
+const refactorCode = (parsedCode) => {
+    let code = escodegen.generate(parsedCode);
+    let output = '';
+    for (let i = 0; i < code.length; i++) {
+        if (code.charAt(i) === '[') {
+            let tmp = code.substring(i, code.length);
+            let array = tmp.substring(1, tmp.indexOf(']'));
+            output += array.replace(/\s/, '');
+            i += tmp.indexOf(']');
+        }
+        else
+            output += code.charAt(i);
+    }
     return output;
+};
+let colorIdx = 0;
+const dyeCode = (code) => {
+    let final = '<pre>';
+    let lines = code.split('\n');
+    for (let i=0; i<lines.length; i++ ){
+        final += dyeLine(lines[i]);
+    }
+    return  final + '</pre>';
+};
+
+const dyeLine = (line) =>{
+    let output =line;
+    if (line.includes('else if (')) {
+        let newLine = line.substring(0, line.lastIndexOf(')'));
+        output = '<span style="background-color:' + testColors[colorIdx++] + ';"> '+ newLine +' </span>';
+    }
+    else if (line.includes('if (')) {
+        let newLine = line.substring(0, line.lastIndexOf(')'));
+        output = '<span style="background-color:' + testColors[colorIdx++] + ';"> '+ newLine +' </span>';
+    }
+    else if(line.includes('while (')) {
+        let newLine = line.substring(0, line.lastIndexOf(')'));
+        output = '<span style="background-color:' + testColors[colorIdx++] + ';"> '+ newLine +' </span>';
+    }
+    return '\n' + output + '\n';
 };
 
 const isValDecl  = (x) => x.type === 'VariableDeclaration';
@@ -36,7 +58,6 @@ const isWhile = (x) => x.type === 'WhileStatement';
 const isIf = (x) => x.type === 'IfStatement';
 const isExpression = (x) => x.type === 'ExpressionStatement';
 const isFunction = (x) => x.type === 'FunctionDeclaration';
-
 
 const parseProgram = (ast,params) => {
     let symbolTable = {};
@@ -119,7 +140,6 @@ const parseAssignment = (expr,symbolTable,paramTable) => {
     return null;
 };
 
-
 const parseWhile = (expr,symbolTable,paramTable) => {
     let scope = Object.assign({},symbolTable);
     expr.test = substitute(expr.test,symbolTable);
@@ -161,7 +181,6 @@ const ifHandler =(expr,symbolTable,paramTable) => {
     return expr;
 };
 
-
 const parseReturn = (retExp,symbolTable) => {
     retExp.argument = substitute(retExp.argument,symbolTable)
     return retExp;
@@ -199,8 +218,6 @@ const otherSubs = (expr,symbolTable) => {
         if(expr.object.type !== 'Identifier'){
             expr = esprima.parseScript(escodegen.generate(expr)).body[0].expression;
         }
-
-
     }
     return expr;
 };

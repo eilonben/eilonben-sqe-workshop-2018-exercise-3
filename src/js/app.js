@@ -6,6 +6,6 @@ $(document).ready(function () {
         let codeToParse = $('#codePlaceholder').val();
         let params = $('#paramsPlaceHolder').val();
         console.log(params);
-        $('#parsedCode').val(parseCode(codeToParse,params));
+        $('#parsedCode').html(parseCode(codeToParse,params));
     });
 });
