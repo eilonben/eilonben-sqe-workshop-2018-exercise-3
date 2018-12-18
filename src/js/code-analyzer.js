@@ -5,6 +5,7 @@ let testColors = {};
 let testIndex= 0;
 
 const parseCode = (codeToParse,params) => {
+
     let initialAst = esprima.parseScript(codeToParse);
     let finalAst = parseProgram(initialAst,params);
     return dyeCode(refactorCode(finalAst));
@@ -17,8 +18,8 @@ const refactorCode = (parsedCode) => {
     for (let i = 0; i < code.length; i++) {
         if (code.charAt(i) === '[') {
             let tmp = code.substring(i, code.length);
-            let array = tmp.substring(1, tmp.indexOf(']'));
-            output += array.replace(/\s/, '');
+            let array = tmp.substring(0, tmp.indexOf(']')+1);
+            output += array.replace(/\s/g, '');
             i += tmp.indexOf(']');
         }
         else
@@ -33,24 +34,18 @@ const dyeCode = (code) => {
     for (let i=0; i<lines.length; i++ ){
         final += dyeLine(lines[i]);
     }
+
     return  final + '</pre>';
+
 };
 
 const dyeLine = (line) =>{
     let output =line;
-    if (line.includes('else if (')) {
+    if (line.includes('else if (') || line.includes('if (') || line.includes('while (') ) {
         let newLine = line.substring(0, line.lastIndexOf(')'));
         output = '<span style="background-color:' + testColors[colorIdx++] + ';"> '+ newLine +' </span>';
     }
-    else if (line.includes('if (')) {
-        let newLine = line.substring(0, line.lastIndexOf(')'));
-        output = '<span style="background-color:' + testColors[colorIdx++] + ';"> '+ newLine +' </span>';
-    }
-    else if(line.includes('while (')) {
-        let newLine = line.substring(0, line.lastIndexOf(')'));
-        output = '<span style="background-color:' + testColors[colorIdx++] + ';"> '+ newLine +' </span>';
-    }
-    return '\n' + output + '\n';
+    return '\n' + output ;
 };
 
 const isValDecl  = (x) => x.type === 'VariableDeclaration';
@@ -60,6 +55,9 @@ const isExpression = (x) => x.type === 'ExpressionStatement';
 const isFunction = (x) => x.type === 'FunctionDeclaration';
 
 const parseProgram = (ast,params) => {
+    testIndex =0;
+    testColors ={};
+    colorIdx =0;
     let symbolTable = {};
     ast.body = ast.body.map((expr) => parseExpr(expr,symbolTable,params));
     ast.body = ast.body.filter(expr => expr!=null);
@@ -67,7 +65,6 @@ const parseProgram = (ast,params) => {
 };
 
 const parseExpr = (singleExpr,symbolTable,paramTable) => {
-    console.log('the table in parse is' + symbolTable);
     let output = {} ;
     isFunction(singleExpr) ? output = parseFunc(singleExpr,symbolTable,paramTable):
         isValDecl(singleExpr) | isExpression(singleExpr) ? output = parseDeclAssign(singleExpr,symbolTable,paramTable) :
@@ -85,8 +82,8 @@ const parseDeclAssign = (expr,symbolTable,paramTable) => {
 };
 
 const parseBody = (exprBody,symbolTable,paramTable) => {
-    if (exprBody === null || exprBody.type === 'EmptyStatement')
-        return exprBody;
+    // if (exprBody === null || exprBody.type === 'EmptyStatement')
+    //     return exprBody;
     if (exprBody.type === 'BlockStatement') {
         exprBody.body = exprBody.body.map((expr) => parseExpr(expr,symbolTable,paramTable)); // the body of the block statement
         exprBody.body = exprBody.body.filter(expr => expr!=null);
@@ -103,13 +100,11 @@ const parseFunc = (funcAst,symbolTable,params) => {
         else
             paramTable[funcAst.params[i].name] = esprima.parseScript(paramsArr[i].toString()).body[0].expression;
     }
-    console.log(paramTable);
     funcAst.body = parseBody(funcAst.body,symbolTable,paramTable);
     return funcAst;
 };
 
 const parseValDecl = (decl,symbolTable) => {
-    console.log(symbolTable);
     decl.declarations.forEach ( (varD) => {
         let id = varD.id.name;
         if (varD.init != null) {
@@ -143,7 +138,6 @@ const parseAssignment = (expr,symbolTable,paramTable) => {
 const parseWhile = (expr,symbolTable,paramTable) => {
     let scope = Object.assign({},symbolTable);
     expr.test = substitute(expr.test,symbolTable);
-    // let testTable = Object.assign(paramTable,symbolTable);
     let testResult = eval(subTest(expr.test,paramTable));
     if (testResult)
         testColors[testIndex] = 'green';
@@ -167,10 +161,7 @@ const parseIf = (expr,symbolTable,paramTable) => {
 
 const ifHandler =(expr,symbolTable,paramTable) => {
     let scope = Object.assign({},symbolTable);
-    if(expr.consequent.type === 'BlockStatement')
-        expr.consequent = parseBody(expr.consequent,scope,paramTable);
-    else
-        expr.consequent = parseExpr(expr.consequent,symbolTable,paramTable);
+    expr.consequent = parseBody(expr.consequent,scope,paramTable);
     if (expr.alternate === null || expr.alternate === undefined)
         return expr;
     scope = Object.assign({},symbolTable);
@@ -182,7 +173,7 @@ const ifHandler =(expr,symbolTable,paramTable) => {
 };
 
 const parseReturn = (retExp,symbolTable) => {
-    retExp.argument = substitute(retExp.argument,symbolTable)
+    retExp.argument = substitute(retExp.argument,symbolTable);
     return retExp;
 };
 
@@ -192,10 +183,6 @@ const substitute = (expr,symbolTable) => {
         if (symbolTable[expr.name]){
             return substitute(symbolTable[expr.name],symbolTable);
         }
-        return expr;
-    }
-    else if (expType === 'UnaryExpression') {
-        expr.argument = substitute(expr.argument, symbolTable);
         return expr;
     }
     else
@@ -214,18 +201,16 @@ const otherSubs = (expr,symbolTable) => {
     else if (expType === 'MemberExpression'){// member expression
         expr.object = substitute(expr.object, symbolTable);
         expr.property = substitute(expr.property, symbolTable);
-        console.log(expr);
-        if(expr.object.type !== 'Identifier'){
-            expr = esprima.parseScript(escodegen.generate(expr)).body[0].expression;
-        }
     }
     return expr;
 };
-
 const subTest = (expr,paramTable) => {
     let tmpExp =escodegen.generate(expr);
     let toSub = esprima.parseScript(tmpExp).body[0].expression;
     return escodegen.generate(substitute(toSub,paramTable));
-}
+};
 export {parseCode};
+export {parseProgram};
+export {refactorCode};
+export {dyeCode};
 
