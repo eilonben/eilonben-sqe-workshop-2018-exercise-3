@@ -1,107 +1,103 @@
 import * as esprima from 'esprima';
 import * as escodegen from 'escodegen';
 
-let testColors = {};
-let testIndex= 0;
+let nodeCount;
+let nullCount;
+let finalResult;
+let edges;
 
 const parseCode = (codeToParse,params) => {
-
+    nullCount =1;
+    nodeCount=1;
+    finalResult ='';
+    edges = '';
     let initialAst = esprima.parseScript(codeToParse);
-    let finalAst = parseProgram(initialAst,params);
-    return dyeCode(refactorCode(finalAst));
-
+    parseProgram(initialAst,params);
+    return ''+finalResult + edges;
 };
 
-const refactorCode = (parsedCode) => {
-    let code = escodegen.generate(parsedCode);
-    let output = '';
-    for (let i = 0; i < code.length; i++) {
-        if (code.charAt(i) === '[') {
-            let tmp = code.substring(i, code.length);
-            let array = tmp.substring(0, tmp.indexOf(']')+1);
-            output += array.replace(/\s/g, '');
-            i += tmp.indexOf(']');
-        }
-        else
-            output += code.charAt(i);
-    }
-    return output;
-};
-let colorIdx = 0;
-const dyeCode = (code) => {
-    let final = '<pre>';
-    let lines = code.split('\n');
-    for (let i=0; i<lines.length; i++ ){
-        final += dyeLine(lines[i]);
-    }
-
-    return  final + '</pre>';
-
-};
-
-const dyeLine = (line) =>{
-    let output =line;
-    if (line.includes('else if (') || line.includes('if (') || line.includes('while (') ) {
-        let newLine = line.substring(0, line.lastIndexOf(')'));
-        output = '<span style="background-color:' + testColors[colorIdx++] + ';"> '+ newLine +' </span>';
-    }
-    return '\n' + output ;
-};
-
+const isDeclOrAssign = (x) => isValDecl(x) || isExpression(x);
 const isValDecl  = (x) => x.type === 'VariableDeclaration';
 const isWhile = (x) => x.type === 'WhileStatement';
 const isIf = (x) => x.type === 'IfStatement';
 const isExpression = (x) => x.type === 'ExpressionStatement';
-const isFunction = (x) => x.type === 'FunctionDeclaration';
 
 const parseProgram = (ast,params) => {
-    testIndex =0;
-    testColors ={};
-    colorIdx =0;
     let symbolTable = {};
-    ast.body = ast.body.map((expr) => parseExpr(expr,symbolTable,params));
-    ast.body = ast.body.filter(expr => expr!=null);
-    return ast;
-};
-
-const parseExpr = (singleExpr,symbolTable,paramTable) => {
-    let output = {} ;
-    isFunction(singleExpr) ? output = parseFunc(singleExpr,symbolTable,paramTable):
-        isValDecl(singleExpr) | isExpression(singleExpr) ? output = parseDeclAssign(singleExpr,symbolTable,paramTable) :
-            isWhile(singleExpr) ? output = parseWhile(singleExpr,symbolTable,paramTable) :
-                isIf(singleExpr) ? output = parseIf(singleExpr,symbolTable,paramTable) :
-                    output = parseReturn(singleExpr,symbolTable);
-    return output;
-};
-
-const parseDeclAssign = (expr,symbolTable,paramTable) => {
-    let output;
-    isValDecl(expr) ? output = parseValDecl(expr,symbolTable) :
-        output = parseAssignment(expr,symbolTable,paramTable);
-    return output;
-};
-
-const parseBody = (exprBody,symbolTable,paramTable) => {
-    // if (exprBody === null || exprBody.type === 'EmptyStatement')
-    //     return exprBody;
-    if (exprBody.type === 'BlockStatement') {
-        exprBody.body = exprBody.body.map((expr) => parseExpr(expr,symbolTable,paramTable)); // the body of the block statement
-        exprBody.body = exprBody.body.filter(expr => expr!=null);
+    let i=0;
+    finalResult = 'global' + nodeCount + '=>operation: ('+nodeCount+') \n';
+    let resLengh = finalResult.length;
+    while (isValDecl(ast.body[i])){
+        finalResult+= parseValDecl(ast.body[i],symbolTable) + '\n';
+        i++;
     }
-    return exprBody;
+    finalResult+='st=>start: Function\n';
+    if (resLengh !== finalResult.length){
+        nodeCount++;
+        edges='global1->st \n';
+    }
+    else
+        edges = '';
+    parseFunc(ast.body[i],symbolTable,params,'st');
 };
-const parseFunc = (funcAst,symbolTable,params) => {
-    let paramsArr = eval('[' + params + ']');
-    let paramTable ={};
-    for (let i =0; i<paramsArr.length; i++){
-        if (paramsArr[i].constructor === Array){
-            paramTable[funcAst.params[i].name] = esprima.parseScript('[' +paramsArr[i].toString() + ']').body[0].expression;
+
+
+const parseDeclAssign = (exprBody,i,symbolTable,prev,green) => {
+    let label ='';
+    while(i<exprBody.length && (isDeclOrAssign(exprBody[i]))){
+        if (isExpression(exprBody[i])){
+            label+=parseAssignment(exprBody[i].expression,symbolTable) + '\n';
         }
         else
-            paramTable[funcAst.params[i].name] = esprima.parseScript(paramsArr[i].toString()).body[0].expression;
+            label+=parseValDecl(exprBody[i],symbolTable) + '\n';
     }
-    funcAst.body = parseBody(funcAst.body,symbolTable,paramTable);
-    return funcAst;
+    if (green){
+        label = label.substring(0,label.length-1) + '| green' +'\n';
+    }
+    let nodeName = 'oper' + nodeCount ;
+    nodeCount++;
+    edges += prev+'->'+nodeName;
+    finalResult+= nodeName + '=>operation: ('+nodeCount+') \n' + label;
+    return nodeName;
+};
+
+function parseBody(exprBody,symbolTable,prev,green) {
+    let lastNode =prev;
+    let i =0;
+    while (i<exprBody.length){
+        if(isDeclOrAssign(exprBody[i])){
+            lastNode = parseDeclAssign(exprBody,i,symbolTable,lastNode,green);
+        }
+        else
+        if (isIf(exprBody[i]) || isWhile(exprBody[i])){
+            lastNode=parseCond(exprBody[i],symbolTable,lastNode,green);
+            i++;
+        }
+        else {
+            lastNode = parseReturn(exprBody[i],symbolTable,lastNode,green);
+            i++;
+        }
+    }
+    return lastNode;
+}
+
+const parseCond = (condExpr,symbolTable,lastN,green) => {
+    if (isWhile(condExpr)){
+        return parseWhile(condExpr,symbolTable,lastN,green);
+    }
+    return parseIf(condExpr,symbolTable,lastN,green);
+};
+const parseFunc = (funcAst,symbolTable,params,prev) => {
+    let paramsArr = eval('[' + params + ']');
+    let newTable  =Object.assign({},symbolTable);
+    for (let i =0; i<paramsArr.length; i++){
+        if (paramsArr[i].constructor === Array){
+            newTable[funcAst.params[i].name] = esprima.parseScript('[' +paramsArr[i].toString() + ']').body[0].expression;
+        }
+        else
+            newTable[funcAst.params[i].name] = esprima.parseScript(paramsArr[i].toString()).body[0].expression;
+    }
+    parseBody(funcAst.body.body,symbolTable,prev);
 };
 
 const parseValDecl = (decl,symbolTable) => {
@@ -111,10 +107,10 @@ const parseValDecl = (decl,symbolTable) => {
             symbolTable[id] = varD.init;
         }
     });
-    return null;
+    return escodegen.generate(decl);
 };
 
-const parseAssignment = (expr,symbolTable,paramTable) => {
+const parseAssignment = (expr,symbolTable) => {
     let newTable = Object.assign({},symbolTable);
     let lhs = expr.expression.left;
     let rhs = expr.expression.right;
@@ -124,59 +120,101 @@ const parseAssignment = (expr,symbolTable,paramTable) => {
         newTable[name] = subRhs;
     }
     else {
-        if (paramTable[lhs.name]) {
-            rhs = subRhs;
-            newTable[lhs.name] = rhs;
-            symbolTable = Object.assign(symbolTable,newTable);
-            return expr;
-        }
         newTable[lhs.name] = subRhs;
         symbolTable = Object.assign(symbolTable,newTable);}
-    return null;
+    return escodegen.generate(expr.expression);
 };
 
-const parseWhile = (expr,symbolTable,paramTable) => {
+const parseWhile = (expr,symbolTable,lastN,green) => {
     let scope = Object.assign({},symbolTable);
-    expr.test = substitute(expr.test,symbolTable);
-    let testResult = eval(subTest(expr.test,paramTable));
-    if (testResult)
-        testColors[testIndex] = 'green';
-    else
-        testColors[testIndex] = 'red';
-    testIndex++;
-    expr.body = parseBody(expr.body,scope,paramTable);
-    return expr;
+    let tmpExpr = escodegen.generate(esprima.parseScript(expr).body[0].expression);
+    tmpExpr.test = substitute(tmpExpr.test,symbolTable);
+    let whileGreen = eval(subTest(tmpExpr.test,symbolTable));
+    let nullNodeName = 'null' +nullCount++;
+    let whileTest = 'while'+nodeCount++;
+    edges+=lastN + '->' + nullNodeName+'\n';
+    edges+=nullNodeName + '->' + whileTest+'\n';
+    if (green){
+        finalResult+= whileTest+ '=>condition: ('+nodeCount-1+')\n'+escodegen.generate(expr.test) + '| green\n';
+        finalResult+= nullNodeName+ '=>operation: NULL| green\n';
+    }
+    else {
+        finalResult+= whileTest+ '=>condition: ('+nodeCount-1+')\n'+escodegen.generate(expr.test);
+        finalResult += nullNodeName + '=>operation: NULL\n';
+    }
+    return parseWhileBody(expr.body,scope,nullNodeName,whileTest,whileGreen);
 };
 
-const parseIf = (expr,symbolTable,paramTable) => {
-    expr.test = substitute(expr.test, symbolTable);
-    let testResult = eval(subTest(expr.test, paramTable));
-    if (testResult)
-        testColors[testIndex] = 'green';
+const parseWhileBody = (body,symbolTable,NullNode,whileTest,green) => {
+    let bodyEnd;
+    if (body.type === 'BlockStatement'){
+        bodyEnd = parseBody(body.body,symbolTable,whileTest+'(yes)',green);
+    }
     else
-        testColors[testIndex] = 'red';
-    testIndex++;
-    return ifHandler(expr, symbolTable, paramTable);
+        bodyEnd = parseBody([body],symbolTable,whileTest+'(yes)',green);
+    edges+=bodyEnd+'->'+NullNode+'\n';
+    return whileTest+'(no)';
 };
-
-const ifHandler =(expr,symbolTable,paramTable) => {
+const parseIf = (expr,symbolTable,lastN,green) => {
     let scope = Object.assign({},symbolTable);
-    expr.consequent = parseBody(expr.consequent,scope,paramTable);
-    if (expr.alternate === null || expr.alternate === undefined)
-        return expr;
-    scope = Object.assign({},symbolTable);
-    if(expr.alternate.type === 'BlockStatement')
-        expr.alternate = parseBody(expr.alternate,scope,paramTable);
+    let tmpExpr = escodegen.generate(esprima.parseScript(expr).body[0].expression);
+    tmpExpr.test = substitute(tmpExpr.test,symbolTable);
+    let IfGreen = eval(subTest(expr.test, symbolTable));
+    let ifNode = 'if'+nodeCount++;
+    edges+=lastN +'->' +ifNode+'\n';
+    let ifNull = 'ifNull'+nullCount++;
+    if (green){
+        finalResult+=ifNode+'=>condition: ('+nodeCount-1+')\n'+escodegen.generate(expr.test)+ '| green\n';
+        finalResult+=ifNull+'=>end: null| green\n';
+    }
+    else {
+        finalResult += ifNode + '=>condition: ('+nodeCount-1+')\n' + escodegen.generate(expr.test);
+        finalResult += ifNull + '=>end: null';
+    }
+    return ifBodyHandler(expr, scope, ifNode,ifNull,IfGreen);
+};
+
+const ifBodyHandler=(expr,symbolTable,ifNode,ifNull,green) =>{
+    let ifConsq;
+
+    if (expr.consequent.type==='BlockStatement'){
+        ifConsq= parseBody(expr.consequent.body.body,symbolTable,ifNode+'(yes)',green);
+    }
     else
-        expr.alternate = parseExpr(expr.alternate,symbolTable,paramTable);
-    return expr;
+        ifConsq= parseBody([expr.consequent.body],symbolTable,ifNode+'(yes)',green);
+    let ifAlt = altHandler(expr,symbolTable,ifNode+'(no)',green);
+    edges+=ifNode +'(yes)->'+ifConsq;
+    if(ifAlt)
+        edges+=ifNode+'(no)->'+ifAlt;
+    else
+        edges+=ifNode+'(no)->'+ifNull;
+    return ifNull;
 };
 
-const parseReturn = (retExp,symbolTable) => {
-    retExp.argument = substitute(retExp.argument,symbolTable);
-    return retExp;
+const altHandler = (expr,symbolTable,ifNode,green) =>{
+    let ifAlt;
+    if (expr.alternate===null || expr.alternate ===undefined)
+        ifAlt='';
+    else{
+        if (expr.alternate.type==='BlockStatement'){
+            ifAlt= parseBody(expr.alternate.body.body,symbolTable,ifNode,green);
+        }
+        else
+            ifAlt= parseBody([expr.alternate.body],symbolTable,ifNode,green);
+    }
+    return ifAlt;
 };
+const parseReturn = (retExp,symbolTable,lastN,green) => {
+    let retName = 'return'+nodeCount;
+    let retNode = retName+'=>operation: ('+ nodeCount++ +')\n' +escodegen.generate(retExp);
+    edges+=lastN+'->'+retName;
+    if (green)
+        finalResult+=retNode+ '| green\n';
+    else
+        finalResult+=retNode+'\n';
+    return '';
 
+};
 const substitute = (expr,symbolTable) => {
     let expType = expr.type;
     if (expType === 'Identifier'){
@@ -187,7 +225,6 @@ const substitute = (expr,symbolTable) => {
     }
     else
         return otherSubs(expr,symbolTable);
-
 };
 const otherSubs = (expr,symbolTable) => {
     let expType = expr.type;
@@ -211,6 +248,5 @@ const subTest = (expr,paramTable) => {
 };
 export {parseCode};
 export {parseProgram};
-export {refactorCode};
-export {dyeCode};
+
 
