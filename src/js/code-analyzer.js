@@ -13,7 +13,7 @@ const parseCode = (codeToParse,params) => {
     edges = '';
     let initialAst = esprima.parseScript(codeToParse);
     parseProgram(initialAst,params);
-    return ''+finalResult + edges;
+    return ''+finalResult +'\n'+ edges;
 };
 
 const isDeclOrAssign = (x) => isValDecl(x) || isExpression(x);
@@ -25,20 +25,22 @@ const isExpression = (x) => x.type === 'ExpressionStatement';
 const parseProgram = (ast,params) => {
     let symbolTable = {};
     let i=0;
-    finalResult = 'global' + nodeCount + '=>operation: ('+nodeCount+') \n';
-    let resLengh = finalResult.length;
+    let globals = 'global' + nodeCount + '=>operation: ('+nodeCount+')\n';
     while (isValDecl(ast.body[i])){
-        finalResult+= parseValDecl(ast.body[i],symbolTable) + '\n';
+        globals+= parseValDecl(ast.body[i],symbolTable) + '\n';
         i++;
     }
-    finalResult+='st=>start: Function\n';
-    if (resLengh !== finalResult.length){
+    if (i>0){
+        finalResult = globals+'| green\n';
+        finalResult+='st=>start: Function\n';
         nodeCount++;
         edges='global1->st \n';
     }
-    else
+    else {
+        finalResult = 'st=>start: Function\n';
         edges = '';
-    parseFunc(ast.body[i],symbolTable,params,'st');
+    }
+    parseFunc(ast.body[i],symbolTable,params,'st',true);
 };
 
 
@@ -50,44 +52,46 @@ const parseDeclAssign = (exprBody,i,symbolTable,prev,green) => {
         }
         else
             label+=parseValDecl(exprBody[i],symbolTable) + '\n';
+        i++;
     }
     if (green){
         label = label.substring(0,label.length-1) + '| green' +'\n';
     }
     let nodeName = 'oper' + nodeCount ;
     nodeCount++;
-    edges += prev+'->'+nodeName;
-    finalResult+= nodeName + '=>operation: ('+nodeCount+') \n' + label;
-    return nodeName;
+    edges += prev+'->'+nodeName+'\n';
+    finalResult+= nodeName + '=>operation: ('+(nodeCount-1)+') \n' + label;
+    return nodeName+','+i;
 };
 
-function parseBody(exprBody,symbolTable,prev,green) {
+function parseBody(exprBody,symbolTable,prev,green,innerCond) {
     let lastNode =prev;
     let i =0;
     while (i<exprBody.length){
         if(isDeclOrAssign(exprBody[i])){
-            lastNode = parseDeclAssign(exprBody,i,symbolTable,lastNode,green);
+            let response = parseDeclAssign(exprBody,i,symbolTable,lastNode,green).split(',');
+            lastNode = response[0];
+            i=response[1];
         }
         else
         if (isIf(exprBody[i]) || isWhile(exprBody[i])){
-            lastNode=parseCond(exprBody[i],symbolTable,lastNode,green);
+            lastNode=parseCond(exprBody[i],symbolTable,lastNode,green,innerCond);
             i++;
         }
         else {
-            lastNode = parseReturn(exprBody[i],symbolTable,lastNode,green);
-            i++;
-        }
+            lastNode = parseReturn(exprBody[i],symbolTable,lastNode);
+            i++;}
     }
     return lastNode;
 }
 
-const parseCond = (condExpr,symbolTable,lastN,green) => {
+const parseCond = (condExpr,symbolTable,lastN,green,innerCond) => {
     if (isWhile(condExpr)){
-        return parseWhile(condExpr,symbolTable,lastN,green);
+        return parseWhile(condExpr,symbolTable,lastN,green,innerCond);
     }
-    return parseIf(condExpr,symbolTable,lastN,green);
+    return parseIf(condExpr,symbolTable,lastN,green,innerCond);
 };
-const parseFunc = (funcAst,symbolTable,params,prev) => {
+const parseFunc = (funcAst,symbolTable,params,prev,green) => {
     let paramsArr = eval('[' + params + ']');
     let newTable  =Object.assign({},symbolTable);
     for (let i =0; i<paramsArr.length; i++){
@@ -97,7 +101,7 @@ const parseFunc = (funcAst,symbolTable,params,prev) => {
         else
             newTable[funcAst.params[i].name] = esprima.parseScript(paramsArr[i].toString()).body[0].expression;
     }
-    parseBody(funcAst.body.body,symbolTable,prev);
+    parseBody(funcAst.body.body,newTable,prev,green,false);
 };
 
 const parseValDecl = (decl,symbolTable) => {
@@ -112,8 +116,8 @@ const parseValDecl = (decl,symbolTable) => {
 
 const parseAssignment = (expr,symbolTable) => {
     let newTable = Object.assign({},symbolTable);
-    let lhs = expr.expression.left;
-    let rhs = expr.expression.right;
+    let lhs = JSON.parse(JSON.stringify(expr.left));
+    let rhs = JSON.parse(JSON.stringify(expr.right));
     let subRhs = substitute(rhs,symbolTable);
     if(lhs.type === 'MemberExpression'){
         let name = escodegen.generate(lhs);
@@ -122,72 +126,78 @@ const parseAssignment = (expr,symbolTable) => {
     else {
         newTable[lhs.name] = subRhs;
         symbolTable = Object.assign(symbolTable,newTable);}
-    return escodegen.generate(expr.expression);
+    return escodegen.generate(expr);
 };
 
-const parseWhile = (expr,symbolTable,lastN,green) => {
+const parseWhile = (expr,symbolTable,lastN,green,innerCond) => {
     let scope = Object.assign({},symbolTable);
-    let tmpExpr = escodegen.generate(esprima.parseScript(expr).body[0].expression);
-    tmpExpr.test = substitute(tmpExpr.test,symbolTable);
-    let whileGreen = eval(subTest(tmpExpr.test,symbolTable));
-    let nullNodeName = 'null' +nullCount++;
-    let whileTest = 'while'+nodeCount++;
+    let tmp = substitute(JSON.parse(JSON.stringify(expr.test)),symbolTable);
+    let whileGreen = eval(subTest(tmp, symbolTable));
+    let nullNodeName = 'null' +nullCount;
+    let whileTest = 'while'+nodeCount;
+    nullCount++;
+    nodeCount++;
     edges+=lastN + '->' + nullNodeName+'\n';
     edges+=nullNodeName + '->' + whileTest+'\n';
     if (green){
-        finalResult+= whileTest+ '=>condition: ('+nodeCount-1+')\n'+escodegen.generate(expr.test) + '| green\n';
+        finalResult+= whileTest+ '=>condition: ('+(nodeCount-1)+')\n'+escodegen.generate(expr.test) + '| green\n';
         finalResult+= nullNodeName+ '=>operation: NULL| green\n';
     }
     else {
-        finalResult+= whileTest+ '=>condition: ('+nodeCount-1+')\n'+escodegen.generate(expr.test);
+        finalResult+= whileTest+ '=>condition: ('+(nodeCount-1)+')\n'+escodegen.generate(expr.test) +'\n';
         finalResult += nullNodeName + '=>operation: NULL\n';
     }
-    return parseWhileBody(expr.body,scope,nullNodeName,whileTest,whileGreen);
+    return parseWhileBody(expr.body,scope,nullNodeName,whileTest,whileGreen && green,innerCond);
 };
 
-const parseWhileBody = (body,symbolTable,NullNode,whileTest,green) => {
+const parseWhileBody = (body,symbolTable,NullNode,whileTest,green,innerCond) => {
     let bodyEnd;
     if (body.type === 'BlockStatement'){
-        bodyEnd = parseBody(body.body,symbolTable,whileTest+'(yes)',green);
+        bodyEnd = parseBody(body.body,symbolTable,whileTest+'(yes)',green,innerCond);
     }
     else
-        bodyEnd = parseBody([body],symbolTable,whileTest+'(yes)',green);
+        bodyEnd = parseBody([body],symbolTable,whileTest+'(yes)',green,innerCond);
     edges+=bodyEnd+'->'+NullNode+'\n';
     return whileTest+'(no)';
 };
-const parseIf = (expr,symbolTable,lastN,green) => {
+const parseIf = (expr,symbolTable,lastN,green,innerCond) => {
     let scope = Object.assign({},symbolTable);
-    let tmpExpr = escodegen.generate(esprima.parseScript(expr).body[0].expression);
-    tmpExpr.test = substitute(tmpExpr.test,symbolTable);
-    let IfGreen = eval(subTest(expr.test, symbolTable));
-    let ifNode = 'if'+nodeCount++;
+    let test = JSON.parse(JSON.stringify(expr.test));
+    let tmp = substitute(test,symbolTable);
+    let IfGreen = eval(escodegen.generate(tmp));
+    let ifNode = 'if'+nodeCount;
+    nodeCount++;
     edges+=lastN +'->' +ifNode+'\n';
-    let ifNull = 'ifNull'+nullCount++;
+    if(innerCond)
+        nullCount=nullCount-1;
+    let ifNull = 'ifNull'+nullCount;
+    nullCount++;
     if (green){
-        finalResult+=ifNode+'=>condition: ('+nodeCount-1+')\n'+escodegen.generate(expr.test)+ '| green\n';
+        finalResult+=ifNode+'=>condition: ('+(nodeCount-1)+')\n'+escodegen.generate(expr.test)+ '| green\n';
         finalResult+=ifNull+'=>end: null| green\n';
     }
     else {
-        finalResult += ifNode + '=>condition: ('+nodeCount-1+')\n' + escodegen.generate(expr.test);
-        finalResult += ifNull + '=>end: null';
-    }
-    return ifBodyHandler(expr, scope, ifNode,ifNull,IfGreen);
-};
+        finalResult += ifNode + '=>condition: ('+(nodeCount-1)+')\n' + escodegen.generate(expr.test)+'\n';
+        finalResult += ifNull + '=>end: null\n';}
+    return ifBodyHandler(expr, scope, ifNode,ifNull,IfGreen&&green,innerCond);};
 
-const ifBodyHandler=(expr,symbolTable,ifNode,ifNull,green) =>{
-    let ifConsq;
-
-    if (expr.consequent.type==='BlockStatement'){
-        ifConsq= parseBody(expr.consequent.body.body,symbolTable,ifNode+'(yes)',green);
+const ifBodyHandler=(expr,symbolTable,ifNode,ifNull,green,innerCond) =>{
+    // if (expr.consequent.type==='BlockStatement'){
+    let  ifConsq =parseBody(expr.consequent.body,symbolTable,ifNode+'(yes)',green,true);
+    // }
+    // else
+    //     ifConsq = parseBody([expr.consequent],symbolTable,ifNode+'(yes)',green,true);
+    let ifAlt = altHandler(expr,symbolTable,ifNode+'(no)',!green);
+    edges+=ifNode +'(yes)->'+ifConsq+'\n';
+    edges+=ifConsq +'->'+ifNull+'\n';
+    if(ifAlt) {
+        edges += ifNode + '(no)->' + ifAlt + '\n';
+        edges += ifAlt + '->' + ifNull + '\n';
     }
     else
-        ifConsq= parseBody([expr.consequent.body],symbolTable,ifNode+'(yes)',green);
-    let ifAlt = altHandler(expr,symbolTable,ifNode+'(no)',green);
-    edges+=ifNode +'(yes)->'+ifConsq;
-    if(ifAlt)
-        edges+=ifNode+'(no)->'+ifAlt;
-    else
-        edges+=ifNode+'(no)->'+ifNull;
+        edges+=ifNode+'(no)->'+ifNull+'\n';
+    if (innerCond)
+        return ifNode;
     return ifNull;
 };
 
@@ -196,32 +206,32 @@ const altHandler = (expr,symbolTable,ifNode,green) =>{
     if (expr.alternate===null || expr.alternate ===undefined)
         ifAlt='';
     else{
-        if (expr.alternate.type==='BlockStatement'){
-            ifAlt= parseBody(expr.alternate.body.body,symbolTable,ifNode,green);
+        if (expr.alternate.type==='BlockStatement') {
+            ifAlt = parseBody(expr.alternate.body, symbolTable, ifNode, green, true);
         }
         else
-            ifAlt= parseBody([expr.alternate.body],symbolTable,ifNode,green);
+            ifAlt= parseBody([expr.alternate],symbolTable,ifNode,green,true);
     }
     return ifAlt;
 };
-const parseReturn = (retExp,symbolTable,lastN,green) => {
+const parseReturn = (retExp,symbolTable,lastN) => {
     let retName = 'return'+nodeCount;
-    let retNode = retName+'=>operation: ('+ nodeCount++ +')\n' +escodegen.generate(retExp);
-    edges+=lastN+'->'+retName;
-    if (green)
-        finalResult+=retNode+ '| green\n';
-    else
-        finalResult+=retNode+'\n';
+    let retNode = retName+'=>operation: \t('+ nodeCount++ +')\n' +escodegen.generate(retExp);
+    edges+=lastN+'->'+retName+'\n';
+    // if (green)
+    finalResult+=retNode+ '| green\n';
+    // else
+    //     finalResult+=retNode+'\n';
     return '';
 
 };
 const substitute = (expr,symbolTable) => {
     let expType = expr.type;
     if (expType === 'Identifier'){
-        if (symbolTable[expr.name]){
-            return substitute(symbolTable[expr.name],symbolTable);
-        }
-        return expr;
+        // if (symbolTable[expr.name]){
+        return substitute(symbolTable[expr.name],symbolTable);
+        // }
+        // return expr;
     }
     else
         return otherSubs(expr,symbolTable);
@@ -242,9 +252,7 @@ const otherSubs = (expr,symbolTable) => {
     return expr;
 };
 const subTest = (expr,paramTable) => {
-    let tmpExp =escodegen.generate(expr);
-    let toSub = esprima.parseScript(tmpExp).body[0].expression;
-    return escodegen.generate(substitute(toSub,paramTable));
+    return escodegen.generate(substitute(expr,paramTable));
 };
 export {parseCode};
 export {parseProgram};
